@@ -56,8 +56,6 @@ type config struct {
 	Token     string `env:"NETLIFY_AUTH_TOKEN"`
 	Site      string `env:"NETLIFY_SITE"`
 	Directory string `env:"NETLIFY_DIRECTORY" envDefault:"./public" envExpand:"true"`
-
-	client *plumbing.Netlify
 }
 
 type shaData struct {
@@ -146,8 +144,6 @@ func main() {
 		panic(errors.New("Auth token is required"))
 	}
 
-	cfg.client = netlifyClient()
-
 	site, err := cfg.findSite(cfg.Site)
 	if err != nil {
 		panic(errors.Wrap(err, "Unable to find the site"))
@@ -185,7 +181,7 @@ func main() {
 		Draft:  true, // FIXME
 		Branch: "preview-site-name",
 	})
-	deploy, err := cfg.client.Operations.CreateSiteDeploy(
+	deploy, err := netlifyClient().Operations.CreateSiteDeploy(
 		siteDeployParams,
 		authInfo(cfg.Token),
 	)
