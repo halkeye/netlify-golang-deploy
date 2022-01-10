@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/sha1"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -38,20 +37,31 @@ func mustGetSha1(filename string) string {
 	return fmt.Sprintf("%x", hash.Sum(nil))
 }
 
+/*
 func debug(i interface{}) {
 	jsonStr, _ := json.Marshal(i)
 	log.Printf(string(jsonStr))
 }
+*/
 
 func authInfo(netlifyAccessToken string) runtime.ClientAuthInfoWriter {
 	return runtime.ClientAuthInfoWriterFunc(func(r runtime.ClientRequest, _ strfmt.Registry) error {
-		r.SetHeaderParam("User-Agent", "User-Agent: netlifyGolangDeploy/0.0.0")
-		r.SetHeaderParam("Authorization", "Bearer "+netlifyAccessToken)
+		err := r.SetHeaderParam("User-Agent", "User-Agent: netlifyGolangDeploy/0.0.0")
+		if err != nil {
+			return errors.Wrap(err, "Unable to set useragent header")
+		}
+
+		err = r.SetHeaderParam("Authorization", "Bearer "+netlifyAccessToken)
+		if err != nil {
+			return errors.Wrap(err, "Unable to set authorization header")
+		}
+
 		return nil
 	})
 }
 
 type uploadQueueAction func() error
+
 type config struct {
 	Token     string `env:"NETLIFY_AUTH_TOKEN"`
 	Site      string `env:"NETLIFY_SITE"`
@@ -66,21 +76,25 @@ type shaData struct {
 func (cfg *config) findSite(siteName string) (*netlify.Site, error) {
 	page := int32(1)
 	perPage := int32(25)
+
 	for {
 		// List sites
 		sites, err := netlifyClient().Operations.ListSites(
 			operations.NewListSitesParams().WithPage(&page).WithPerPage(&perPage),
 			authInfo(cfg.Token),
 		)
+
 		if err != nil {
 			return nil, errors.Wrap(err, "Unable to get a list of sites")
 		}
+
 		for _, site := range sites.GetPayload() {
 			if site.Name == siteName {
 				return site, nil
 			}
 		}
-		page = page + 1
+
+		page++
 	}
 }
 
@@ -92,6 +106,7 @@ func netlifyClient() *plumbing.Netlify {
 
 	transport := openapiClient.NewWithClient(netlifyAPIHost, netlifyAPIPath, plumbing.DefaultSchemes, httpClient)
 	client := plumbing.New(transport, strfmt.Default)
+
 	return client
 }
 
@@ -104,6 +119,7 @@ func (cfg *config) getDeploy(deployID string, wantedStatus string) (*models.Depl
 		if err != nil {
 			return nil, errors.Wrap(err, "Unable to check deploy")
 		}
+
 		if deploy.GetPayload().State == wantedStatus {
 			// site is ready
 			return deploy.GetPayload(), nil
@@ -121,6 +137,7 @@ func (cfg *config) getDeploy(deployID string, wantedStatus string) (*models.Depl
 
 func (cfg *config) wrapUploadJob(deployID string, realFilename string, uri string) func() error {
 	auth := authInfo(cfg.Token)
+
 	return func() error {
 		f, err := os.Open(realFilename)
 		if err != nil {
@@ -130,6 +147,7 @@ func (cfg *config) wrapUploadJob(deployID string, realFilename string, uri strin
 		body := operations.NewUploadDeployFileParams().WithDeployID(deployID).WithPath(uri).WithFileBody(f)
 
 		_, err = netlifyClient().Operations.UploadDeployFile(body, auth)
+
 		return errors.Wrap(err, "Unable to upload file")
 	}
 }
@@ -175,20 +193,21 @@ func main() {
 	if err != nil {
 		panic(errors.Wrap(err, "Unable to walk directory"))
 	}
-	siteDeployParams := operations.NewCreateSiteDeployParams().WithSiteID(site.ID).WithTitle(&title).WithDeploy(&netlify.DeployFiles{
-		Async:  true,
-		Files:  filenameToSha,
-		Draft:  true, // FIXME
-		Branch: "preview-site-name",
-	})
+
 	deploy, err := netlifyClient().Operations.CreateSiteDeploy(
-		siteDeployParams,
+		operations.NewCreateSiteDeployParams().WithSiteID(site.ID).WithTitle(&title).WithDeploy(&netlify.DeployFiles{
+			Async:     true,
+			Branch:    "preview-site-name",
+			Draft:     true,
+			Files:     filenameToSha,
+			Functions: nil,
+		}),
 		authInfo(cfg.Token),
 	)
-	log.Print("Finished creating deploy")
 	if err != nil {
 		panic(errors.Wrap(err, "Unable to create deploy"))
 	}
+
 	if deploy.GetPayload().State == "ready" {
 		log.Print("Done deploying site to " + deploy.GetPayload().DeployURL)
 	}
@@ -199,7 +218,6 @@ func main() {
 	if err != nil {
 		panic(errors.Wrap(err, "Unable to get deploy"))
 	}
-	log.Print("Got deploy")
 
 	queueSize := 5
 	jobChan := make(chan uploadQueueAction, queueSize)
@@ -207,26 +225,29 @@ func main() {
 	var wg sync.WaitGroup
 	for i := 0; i < queueSize; i++ {
 		wg.Add(1)
+
 		go func() {
 			defer wg.Done()
-			// Defines a queue worker, which will execute our queue.
+
 			for job := range jobChan {
-				log.Printf("Processing Job")
-				job()
+				err := job()
+				if err != nil {
+					// FIXME - cancel everthing
+					panic(err)
+				}
 			}
 		}()
 	}
 
 	for _, sha := range preparedDeploy.Required {
-		log.Printf("Enqueuing Job")
-		// Append job to jobs slice.
+		log.Printf("Enqueuing upload of %s", shaToFilename[sha].realfilename)
 		jobChan <- cfg.wrapUploadJob(deployID, shaToFilename[sha].realfilename, shaToFilename[sha].uri)
 	}
 
 	close(jobChan)
 
-	log.Print("Done enqueuing jobs")
 	wg.Wait()
+
 	log.Print("Done uploading")
 
 	_, err = cfg.getDeploy(deployID, "ready")
@@ -235,5 +256,5 @@ func main() {
 		panic(errors.Wrap(err, "finish deployment"))
 	}
 
-	log.Print("Done deploying site to " + deploy.GetPayload().DeployURL)
+	log.Printf("Done deploying site to %s", deploy.GetPayload().DeployURL)
 }
