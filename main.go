@@ -51,7 +51,7 @@ func authInfo(netlifyAccessToken string) runtime.ClientAuthInfoWriter {
 	})
 }
 
-type UploadQueueAction func() error
+type uploadQueueAction func() error
 type config struct {
 	Token     string `env:"NETLIFY_AUTH_TOKEN"`
 	Site      string `env:"NETLIFY_SITE"`
@@ -202,7 +202,7 @@ func main() {
 	log.Print("Got deploy")
 
 	queueSize := 5
-	jobChan := make(chan UploadQueueAction, queueSize)
+	jobChan := make(chan uploadQueueAction, queueSize)
 
 	var wg sync.WaitGroup
 	for i := 0; i < queueSize; i++ {
