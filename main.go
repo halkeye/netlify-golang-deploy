@@ -102,6 +102,7 @@ func (cfg *config) findSite(siteName string) (*netlify.Site, error) {
 		}
 
 		page++
+		log.Printf("[DEBUG] Site wasn't found, looking for site '%s' with page '%d' and per_page '%d'", siteName, page, perPage)
 	}
 }
 
@@ -330,7 +331,7 @@ func deploy(c *cli.Context) error {
 
 	wg.Wait()
 
-	log.Print("Done uploading")
+	log.Print("Done uploading. Waiting for site to be ready")
 
 	_, err = cfg.getDeploy(deployID, "ready")
 
@@ -338,7 +339,7 @@ func deploy(c *cli.Context) error {
 		return errors.Wrap(err, "finish deployment")
 	}
 
-	log.Printf("Done deploying site to %s", deploy.GetPayload().DeployURL)
+	log.Printf("Site is deployed - %s", deploy.GetPayload().DeployURL)
 
 	return nil
 }
