@@ -11,11 +11,11 @@ import (
 	"sync"
 	"time"
 
-	env "github.com/caarlos0/env/v6"
+	"github.com/urfave/cli/v2"
+
 	"github.com/go-openapi/runtime"
 	openapiClient "github.com/go-openapi/runtime/client"
 	"github.com/go-openapi/strfmt"
-	"github.com/netlify/open-api/go/models"
 	netlify "github.com/netlify/open-api/go/models"
 	"github.com/netlify/open-api/go/plumbing"
 	"github.com/netlify/open-api/go/plumbing/operations"
@@ -63,9 +63,12 @@ func authInfo(netlifyAccessToken string) runtime.ClientAuthInfoWriter {
 type uploadQueueAction func() error
 
 type config struct {
-	Token     string `env:"NETLIFY_AUTH_TOKEN"`
-	Site      string `env:"NETLIFY_SITE"`
-	Directory string `env:"NETLIFY_DIRECTORY" envDefault:"./public" envExpand:"true"`
+	Token     string
+	Site      string
+	Directory string
+	Branch    string
+	Title     string
+	QueueSize int
 }
 
 type shaData struct {
@@ -110,7 +113,7 @@ func netlifyClient() *plumbing.Netlify {
 	return client
 }
 
-func (cfg *config) getDeploy(deployID string, wantedStatus string) (*models.Deploy, error) {
+func (cfg *config) getDeploy(deployID string, wantedStatus string) (*netlify.Deploy, error) {
 	for {
 		deploy, err := netlifyClient().Operations.GetDeploy(
 			operations.NewGetDeployParams().WithDeployID(deployID),
@@ -130,7 +133,6 @@ func (cfg *config) getDeploy(deployID string, wantedStatus string) (*models.Depl
 			return deploy.GetPayload(), nil
 		}
 
-		log.Printf("deployID: %s, state: %s", deployID, deploy.GetPayload().State)
 		time.Sleep(time.Duration(1) * time.Second)
 	}
 }
@@ -152,35 +154,24 @@ func (cfg *config) wrapUploadJob(deployID string, realFilename string, uri strin
 	}
 }
 
-func main() {
-	cfg := config{}
-	if err := env.Parse(&cfg); err != nil {
-		panic(errors.Wrap(err, "Unable to parse env"))
-	}
-
-	if len(cfg.Token) == 0 {
-		panic(errors.New("Auth token is required"))
-	}
-
-	site, err := cfg.findSite(cfg.Site)
-	if err != nil {
-		panic(errors.Wrap(err, "Unable to find the site"))
-	}
-
-	title := "Preview Deploy"
+func filesInDirectory(dir string) (map[string]string, map[string]*shaData, error) {
 	filenameToSha := map[string]string{}
 	shaToFilename := map[string]*shaData{}
-	err = filepath.Walk(cfg.Directory, func(path string, info os.FileInfo, err error) error {
+
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
+
 		if info.IsDir() {
 			return nil
 		}
-		key, err := filepath.Rel(cfg.Directory, path)
+
+		key, err := filepath.Rel(dir, path)
 		if err != nil {
 			return err
 		}
+
 		key = "/" + key
 		filenameToSha[key] = mustGetSha1(path)
 		shaToFilename[mustGetSha1(path)] = &shaData{
@@ -190,14 +181,99 @@ func main() {
 
 		return nil
 	})
+
+	return filenameToSha, shaToFilename, err
+}
+
+func main() {
+	app := &cli.App{
+		Name:   "deploy",
+		Usage:  "deploy a directory to netlify",
+		Action: deploy,
+		Authors: []*cli.Author{
+			&cli.Author{
+				Name:  "Gavin Mogan",
+				Email: "netlify-deployer@gavinmogan.com",
+			},
+		},
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:     "deployDir",
+				Aliases:  []string{"d"},
+				Usage:    "directory to be deployed to netlify",
+				EnvVars:  []string{"NETLIFY_DIRECTORY"},
+				Required: true,
+				Value:    "./public",
+			},
+			&cli.StringFlag{
+				Name:        "token",
+				Aliases:     []string{"t"},
+				Usage:       "api token to connect to netlify",
+				EnvVars:     []string{"NETLIFY_AUTH_TOKEN"},
+				DefaultText: "[censored]",
+				Required:    true,
+			},
+			&cli.StringFlag{
+				Name:     "siteName",
+				Aliases:  []string{"s"},
+				Usage:    "Site name to deploy to",
+				EnvVars:  []string{"NETLIFY_SITE"},
+				Required: true,
+			},
+			&cli.StringFlag{
+				Name:     "alias",
+				Aliases:  []string{"a"},
+				Usage:    "Site alias to deploy to",
+				EnvVars:  []string{"NETLIFY_ALIAS"},
+				Required: false,
+			},
+			&cli.StringFlag{
+				Name:     "title",
+				Usage:    "Title to label deploy as in logs",
+				EnvVars:  []string{"NETLIFY_TITLE"},
+				Required: false,
+			},
+			&cli.StringFlag{
+				Name:     "queueSize",
+				Usage:    "Number of parallel upload processes to use",
+				EnvVars:  []string{"NETLIFY_QUEUE_SIZE"},
+				Value:    "5",
+				Required: false,
+			},
+		},
+	}
+
+	err := app.Run(os.Args)
 	if err != nil {
-		panic(errors.Wrap(err, "Unable to walk directory"))
+		log.Fatal(err)
+	}
+}
+
+func deploy(c *cli.Context) error {
+	cfg := config{
+		Token:     c.String("token"),
+		Site:      c.String("siteName"),
+		Directory: c.String("deployDir"),
+		Branch:    c.String("alias"),
+		Title:     c.String("title"),
+		QueueSize: c.Int("queueSize"),
+	}
+
+	site, err := cfg.findSite(cfg.Site)
+	if err != nil {
+		return errors.Wrap(err, "Unable to find the site")
+	}
+
+	filenameToSha, shaToFilename, err := filesInDirectory(cfg.Directory)
+
+	if err != nil {
+		return errors.Wrap(err, "Unable to walk directory")
 	}
 
 	deploy, err := netlifyClient().Operations.CreateSiteDeploy(
-		operations.NewCreateSiteDeployParams().WithSiteID(site.ID).WithTitle(&title).WithDeploy(&netlify.DeployFiles{
+		operations.NewCreateSiteDeployParams().WithSiteID(site.ID).WithTitle(&cfg.Title).WithDeploy(&netlify.DeployFiles{
 			Async:     true,
-			Branch:    "preview-site-name",
+			Branch:    cfg.Branch,
 			Draft:     true,
 			Files:     filenameToSha,
 			Functions: nil,
@@ -205,7 +281,7 @@ func main() {
 		authInfo(cfg.Token),
 	)
 	if err != nil {
-		panic(errors.Wrap(err, "Unable to create deploy"))
+		return errors.Wrap(err, "Unable to create deploy")
 	}
 
 	if deploy.GetPayload().State == "ready" {
@@ -216,14 +292,13 @@ func main() {
 
 	preparedDeploy, err := cfg.getDeploy(deployID, "prepared")
 	if err != nil {
-		panic(errors.Wrap(err, "Unable to get deploy"))
+		return errors.Wrap(err, "Unable to get deploy")
 	}
 
-	queueSize := 5
-	jobChan := make(chan uploadQueueAction, queueSize)
+	jobChan := make(chan uploadQueueAction, cfg.QueueSize)
 
 	var wg sync.WaitGroup
-	for i := 0; i < queueSize; i++ {
+	for i := 0; i < cfg.QueueSize; i++ {
 		wg.Add(1)
 
 		go func() {
@@ -253,8 +328,10 @@ func main() {
 	_, err = cfg.getDeploy(deployID, "ready")
 
 	if err != nil {
-		panic(errors.Wrap(err, "finish deployment"))
+		return errors.Wrap(err, "finish deployment")
 	}
 
 	log.Printf("Done deploying site to %s", deploy.GetPayload().DeployURL)
+
+	return nil
 }
