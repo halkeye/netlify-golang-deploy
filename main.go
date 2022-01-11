@@ -91,6 +91,10 @@ func (cfg *config) findSite(siteName string) (*netlify.Site, error) {
 			return nil, errors.Wrap(err, "Unable to get a list of sites")
 		}
 
+		if len(sites.GetPayload()) == 0 {
+			return nil, nil
+		}
+
 		for _, site := range sites.GetPayload() {
 			if site.Name == siteName {
 				return site, nil
@@ -261,6 +265,10 @@ func deploy(c *cli.Context) error {
 	site, err := cfg.findSite(cfg.Site)
 	if err != nil {
 		return errors.Wrap(err, "Unable to find the site")
+	}
+
+	if site == nil {
+		return fmt.Errorf("No site found for %s", cfg.Site)
 	}
 
 	filenameToSha, shaToFilename, err := filesInDirectory(cfg.Directory)
