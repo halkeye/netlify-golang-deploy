@@ -198,12 +198,11 @@ func main() {
 		},
 		Flags: []cli.Flag{
 			&cli.StringFlag{
-				Name:     "deployDir",
-				Aliases:  []string{"d"},
-				Usage:    "directory to be deployed to netlify",
-				EnvVars:  []string{"NETLIFY_DIRECTORY"},
-				Required: true,
-				Value:    "./public",
+				Name:    "deployDir",
+				Aliases: []string{"d"},
+				Usage:   "directory to be deployed to netlify",
+				EnvVars: []string{"NETLIFY_DIRECTORY"},
+				Value:   "./public",
 			},
 			&cli.StringFlag{
 				Name:        "token",
