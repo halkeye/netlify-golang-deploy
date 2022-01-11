@@ -79,11 +79,12 @@ type shaData struct {
 func (cfg *config) findSite(siteName string) (*netlify.Site, error) {
 	page := int32(1)
 	perPage := int32(25)
+	filter := "all"
 
 	for {
 		// List sites
 		sites, err := netlifyClient().Operations.ListSites(
-			operations.NewListSitesParams().WithPage(&page).WithPerPage(&perPage),
+			operations.NewListSitesParams().WithPage(&page).WithPerPage(&perPage).WithFilter(&filter),
 			authInfo(cfg.Token),
 		)
 
