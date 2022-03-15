@@ -69,6 +69,7 @@ type config struct {
 	Branch    string
 	Title     string
 	QueueSize int
+	Draft     bool
 }
 
 type shaData struct {
@@ -245,6 +246,13 @@ func main() {
 				Value:    "5",
 				Required: false,
 			},
+			&cli.BoolFlag{
+				Name:     "draft",
+				Usage:    "Should this deployed as a draft?",
+				EnvVars:  []string{"NETLIFY_DRAFT"},
+				Value:    true, // old code forced it, we'll default it to false in the future
+				Required: false,
+			},
 		},
 	}
 
@@ -262,6 +270,7 @@ func deploy(c *cli.Context) error {
 		Branch:    c.String("alias"),
 		Title:     c.String("title"),
 		QueueSize: c.Int("queueSize"),
+		Draft:     c.Bool("draft"),
 	}
 
 	site, err := cfg.findSite(cfg.Site)
@@ -283,7 +292,7 @@ func deploy(c *cli.Context) error {
 		operations.NewCreateSiteDeployParams().WithSiteID(site.ID).WithTitle(&cfg.Title).WithDeploy(&netlify.DeployFiles{
 			Async:     true,
 			Branch:    cfg.Branch,
-			Draft:     true,
+			Draft:     cfg.Draft,
 			Files:     filenameToSha,
 			Functions: nil,
 		}),
