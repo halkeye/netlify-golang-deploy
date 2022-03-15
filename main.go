@@ -197,7 +197,7 @@ func main() {
 		Usage:  "deploy a directory to netlify",
 		Action: deploy,
 		Authors: []*cli.Author{
-			&cli.Author{
+			{
 				Name:  "Gavin Mogan",
 				Email: "netlify-deployer@gavinmogan.com",
 			},
