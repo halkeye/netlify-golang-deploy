@@ -7,6 +7,7 @@ require (
 	github.com/go-openapi/strfmt v0.19.11
 	github.com/netlify/open-api v1.4.0
 	github.com/pkg/errors v0.9.1
+	github.com/sethvargo/go-retry v0.2.4
 	github.com/urfave/cli/v2 v2.3.0
 )
 

@@ -1,13 +1,14 @@
 package main
 
 import (
+	"context"
 	"crypto/sha1"
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,8 +20,8 @@ import (
 	netlify "github.com/netlify/open-api/go/models"
 	"github.com/netlify/open-api/go/plumbing"
 	"github.com/netlify/open-api/go/plumbing/operations"
-
 	"github.com/pkg/errors"
+	"github.com/sethvargo/go-retry"
 )
 
 func mustGetSha1(filename string) string {
@@ -112,9 +113,7 @@ func netlifyClient() *plumbing.Netlify {
 	netlifyAPIHost := "api.netlify.com"
 	netlifyAPIPath := "/api/v1"
 
-	httpClient := &http.Client{}
-
-	transport := openapiClient.NewWithClient(netlifyAPIHost, netlifyAPIPath, plumbing.DefaultSchemes, httpClient)
+	transport := openapiClient.New(netlifyAPIHost, netlifyAPIPath, plumbing.DefaultSchemes)
 	client := plumbing.New(transport, strfmt.Default)
 
 	return client
@@ -155,7 +154,21 @@ func (cfg *config) wrapUploadJob(deployID string, realFilename string, uri strin
 
 		body := operations.NewUploadDeployFileParams().WithDeployID(deployID).WithPath(uri).WithFileBody(f)
 
-		_, err = netlifyClient().Operations.UploadDeployFile(body, auth)
+		// initial 5 second delay - https://github.com/netlify/cli/blob/f563cc794fbcb8f9d716dc36a0f7d792f0cf325a/src/utils/deploy/constants.mjs#L14
+		backoff := retry.NewFibonacci(5 * time.Second)
+
+		// Ensure the maximum total retry time is 90s.
+		// 90 second max from https://github.com/netlify/cli/blob/f563cc794fbcb8f9d716dc36a0f7d792f0cf325a/src/utils/deploy/constants.mjs#L16
+		backoff = retry.WithMaxDuration(90*time.Second, backoff)
+
+		ctx := context.Background()
+		err = retry.Do(ctx, backoff, func(ctx context.Context) error {
+			_, err = netlifyClient().Operations.UploadDeployFile(body, auth)
+			if err != nil && strings.Contains(err.Error(), "GOAWAY") {
+				return retry.RetryableError(err)
+			}
+			return err
+		})
 
 		return errors.Wrap(err, "Unable to upload file")
 	}
