@@ -147,13 +147,6 @@ func (cfg *config) wrapUploadJob(deployID string, realFilename string, uri strin
 	auth := authInfo(cfg.Token)
 
 	return func() error {
-		f, err := os.Open(realFilename)
-		if err != nil {
-			return errors.Wrap(err, "Unable to open file")
-		}
-
-		body := operations.NewUploadDeployFileParams().WithDeployID(deployID).WithPath(uri).WithFileBody(f)
-
 		// initial 5 second delay - https://github.com/netlify/cli/blob/f563cc794fbcb8f9d716dc36a0f7d792f0cf325a/src/utils/deploy/constants.mjs#L14
 		backoff := retry.NewFibonacci(5 * time.Second)
 
@@ -162,7 +155,19 @@ func (cfg *config) wrapUploadJob(deployID string, realFilename string, uri strin
 		backoff = retry.WithMaxDuration(90*time.Second, backoff)
 
 		ctx := context.Background()
-		err = retry.Do(ctx, backoff, func(ctx context.Context) error {
+
+		err := retry.Do(ctx, backoff, func(ctx context.Context) error {
+			// Open the file for every attempt. The HTTP client may close the
+			// file after an unsuccessful request, so reusing the same file
+			// between retries can result in "file already closed".
+			f, err := os.Open(realFilename)
+			if err != nil {
+				return errors.Wrap(err, "Unable to open file")
+			}
+			defer f.Close()
+
+			body := operations.NewUploadDeployFileParams().WithDeployID(deployID).WithPath(uri).WithFileBody(f)
+
 			_, err = netlifyClient().Operations.UploadDeployFile(body, auth)
 			if err != nil && strings.Contains(err.Error(), "GOAWAY") {
 				return retry.RetryableError(err)
